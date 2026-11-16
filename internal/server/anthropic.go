@@ -314,15 +314,20 @@ func toChatBody(req *anthropicRequest, chatModel string) ([]byte, error) {
 		text := strings.Join(textParts, "\n")
 
 		// tool_result：拆成 OpenAI role=tool 消息（tool_call_id 即 Anthropic tool_use_id，
-		// 原样透传，省掉一层 id 映射）。同消息里的正文先作 user 消息输出。
+		// 原样透传，省掉一层 id 映射）。
+		//
+		// 顺序关键：OpenAI 要求 role=tool 消息**紧跟**声明它的 assistant(tool_calls)。
+		// 同一条 user 消息里若混着正文，必须把正文放到 tool 消息**之后**，否则
+		// assistant(tool_calls) → user(正文) → tool(result) 会被上游判 11148
+		// （tool calls and tool results do not match / tool_call_sequence_broken）。
 		if len(toolResults) > 0 {
-			if strings.TrimSpace(text) != "" {
-				msgs = append(msgs, map[string]any{"role": "user", "content": text})
-			}
 			for _, tr := range toolResults {
 				msgs = append(msgs, map[string]any{
 					"role": "tool", "tool_call_id": tr.ToolUseID, "content": toolResultContent(tr),
 				})
+			}
+			if strings.TrimSpace(text) != "" {
+				msgs = append(msgs, map[string]any{"role": "user", "content": text})
 			}
 			continue
 		}

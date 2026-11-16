@@ -226,3 +226,36 @@ func TestFinishToStopReason(t *testing.T) {
 		}
 	}
 }
+
+// TestToChatBodyToolResultWithText 锁定顺序：user 消息里正文与 tool_result 混排时，
+// 转换后 role=tool 必须紧跟 assistant(tool_calls)，正文 user 消息放到 tool 之后。
+// 反序会被上游判 11148（tool_call_sequence_broken）。
+func TestToChatBodyToolResultWithText(t *testing.T) {
+	req := &anthropicRequest{
+		Model:     "cn:deepseek-v4-flash",
+		MaxTokens: 100,
+		Messages: []anthropicTurn{
+			{Role: "user", Content: json.RawMessage(`"查天气"`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"tool_use","id":"call_A","name":"get_weather","input":{"city":"北京"}}]`)},
+			{Role: "user", Content: json.RawMessage(`[{"type":"text","text":"这是结果"},{"type":"tool_result","tool_use_id":"call_A","content":"晴"}]`)},
+		},
+	}
+	raw, err := toChatBody(req, "cn:deepseek-v4-flash")
+	if err != nil {
+		t.Fatalf("toChatBody: %v", err)
+	}
+	msgs := decodeBody(t, raw)["messages"].([]any)
+	if len(msgs) != 4 {
+		t.Fatalf("messages len=%d want 4", len(msgs))
+	}
+	// 顺序：user → assistant(tool_calls) → tool → user(正文)
+	if got := msgs[2].(map[string]any)["role"]; got != "tool" {
+		t.Errorf("msgs[2].role=%v want tool（必须紧跟 assistant）", got)
+	}
+	if got := msgs[3].(map[string]any)["role"]; got != "user" {
+		t.Errorf("msgs[3].role=%v want user（正文放 tool 之后）", got)
+	}
+	if got := msgs[3].(map[string]any)["content"]; got != "这是结果" {
+		t.Errorf("msgs[3].content=%v", got)
+	}
+}
