@@ -271,9 +271,9 @@ func TestMessagesSearchUpstreamErrorShape(t *testing.T) {
 	}
 }
 
-// TestMessagesRouteDoesNotShadowV1Messages 断言搜索端点没有占用 /v1/messages
-// （该路径保留给 Anthropic 模型对话）。
-func TestMessagesRouteDoesNotShadowV1Messages(t *testing.T) {
+// TestMessagesRouteServedByAnthropicHandler 断言 /v1/messages 已由 Anthropic
+// Messages 转换层接管（不再 404）。空请求体在参数校验阶段即被拒，不打上游。
+func TestMessagesRouteServedByAnthropicHandler(t *testing.T) {
 	up := newSearchUpstream(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Error("不得打上游")
 	})
@@ -283,8 +283,11 @@ func TestMessagesRouteDoesNotShadowV1Messages(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader([]byte(`{}`)))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("POST /v1/messages code=%d want 404（该路径留给模型对话）", rec.Code)
+	if rec.Code == http.StatusNotFound {
+		t.Fatalf("POST /v1/messages code=404：端点未注册")
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("POST /v1/messages code=%d want 400（缺 model/max_tokens）", rec.Code)
 	}
 }
 

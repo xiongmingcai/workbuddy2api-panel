@@ -36,6 +36,28 @@ func VerifyBearer(r *http.Request, key string) bool {
 	return subtle.ConstantTimeCompare(digest(tok), digest(key)) == 1
 }
 
+// VerifyRequest 校验请求是否携带正确的密钥，接受两种传递方式：
+//   - Authorization: Bearer <key>（OpenAI 风格）
+//   - x-api-key: <key>（Anthropic / Claude Code 风格）
+//
+// 与 VerifyBearer 同口径：key 为空恒放行；摘要 + 常量时间比较，两种方式都做
+// 相同形状的比较，不因缺头/方案差异泄露信息。
+func VerifyRequest(r *http.Request, key string) bool {
+	if key == "" {
+		return true
+	}
+	if VerifyBearer(r, key) {
+		return true
+	}
+	tok := strings.TrimSpace(r.Header.Get("x-api-key"))
+	if tok == "" {
+		// 缺头：仍做一次摘要比较，保持与 Bearer 路径一致的耗时形状。
+		subtle.ConstantTimeCompare(digest(""), digest(key))
+		return false
+	}
+	return subtle.ConstantTimeCompare(digest(tok), digest(key)) == 1
+}
+
 // digest 返回 s 的 SHA-256（定长 32 字节，供常量时间比较）。
 func digest(s string) []byte {
 	sum := sha256.Sum256([]byte(s))
