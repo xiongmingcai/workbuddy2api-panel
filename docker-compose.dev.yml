@@ -1,0 +1,37 @@
+# 开发模式：源码 bind mount + air 热重载。
+# 用法：docker compose -f docker-compose.dev.yml up -d --build
+# 之后改 Go 代码无需再 --build，air 会自动重编译重启。
+# 注意：与生产 docker-compose.yml 共用 7863 端口，同一时刻只跑一个。
+services:
+  wb2api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY-http://172.18.0.1:7891}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY-http://172.18.0.1:7891}
+        NO_PROXY: ${BUILD_NO_PROXY-localhost,127.0.0.1}
+    container_name: workbuddy2api-dev
+    # 独立镜像名，避免与生产镜像 <project>-wb2api 互相覆盖
+    image: wb2api-dev
+    restart: unless-stopped
+    # 与生产一致用 app(10001)；./auths ./data config.json 属主本来就是 10001，直接对齐。
+    user: "${PUID:-10001}:${PGID:-10001}"
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "7863:7863"
+    working_dir: /app
+    volumes:
+      # 源码双向绑定：宿主机改动 → 容器立即可见 → air 自动重编译重启
+      - .:/app
+      # 数据/配置仍走独立挂载（与生产一致）
+      - ./auths:/app/auths
+      - ./data:/app/data
+      - ./config.json:/app/config.json
+      # 依赖缓存卷：避免每次重建容器都重新 go mod download
+      - wb2api-go-mod:/go/pkg/mod
+    command: ["air", "-c", ".air.toml"]
+
+volumes:
+  wb2api-go-mod:

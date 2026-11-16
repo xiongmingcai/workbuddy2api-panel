@@ -1,6 +1,14 @@
 # syntax=docker/dockerfile:1
 FROM golang:1.23-alpine AS build
+# 构建期代理：由 docker-compose.yml 的 build.args 注入（默认指向宿主机 relay，
+# 加速 go mod download；未传值时自动不走代理）。
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
 WORKDIR /src
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=sum.golang.google.cn
 COPY go.mod ./
 # 防止因为直接使用官方源导致下载失败
 RUN go env -w GOPROXY=https://goproxy.cn,direct && \
@@ -14,6 +22,11 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/wb2api ./cmd/serve
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/credit ./cmd/credit
 
 FROM alpine:3.20
+# 构建期代理：让 apk add 也走代理（与 build 阶段共用 compose 注入的 build args）。
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
 # python3：login.sh 的 JSON 解析 / 签到 / 落盘；bash：shell 脚本体。
 RUN apk add --no-cache wget ca-certificates tzdata python3 bash \
  && adduser -D -u 10001 app \

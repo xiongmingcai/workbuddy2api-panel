@@ -1,0 +1,26 @@
+# air 热重载配置（仅开发模式使用，配合 docker-compose.dev.yml）
+# 改 Go 源码 → air 自动 go build + 重启进程，无需重新 build 镜像。
+root = "/app"
+tmp_dir = "/tmp/air"
+
+[build]
+# 编译产物放容器内（不写挂载卷，避免属主/权限问题）
+cmd = "go build -trimpath -buildvcs=false -o /tmp/air/wb2api ./cmd/server"
+bin = "/tmp/air/wb2api"
+# 原镜像 ENTRYPOINT 等价参数
+args_bin = ["-config", "/app/config.json"]
+# 只监听这些后缀，避免 auths/data 里的 json 变化触发无谓重启
+include_ext = ["go", "tpl", "tmpl", "html"]
+exclude_dir = ["tmp", "vendor", ".git", "auths", "data", "scripts"]
+exclude_file = ["models-dashboard.html"]
+exclude_regex = ["_test\\.go$"]
+
+[log]
+time = true
+
+[color]
+main = "yellow"
+watcher = "cyan"
+build = "green"
+runner = "magenta"
+app = "white"

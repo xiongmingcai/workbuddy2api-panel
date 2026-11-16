@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# 开发镜像：Go 工具链 + air 热重载。只 build 一次，之后改代码永远不用再 build。
+# 源码通过 docker-compose.dev.yml 的 bind mount 挂进 /app，不 COPY 进镜像。
+FROM golang:1.23-alpine
+# 构建期代理（与生产 Dockerfile 一致，由 dev compose 注入；置空则不走代理）
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG ALL_PROXY
+ARG NO_PROXY
+ENV GOPROXY=https://goproxy.cn,direct
+ENV GOSUMDB=sum.golang.google.cn
+# bash/python3：login.sh / signin.sh / scripts/*.py 在容器内可直接跑
+# git：go mod direct 回退时拉取 github 依赖用
+# ca-certificates/tzdata/wget：与生产运行时对齐（healthz 等）
+RUN apk add --no-cache wget ca-certificates tzdata bash python3 git \
+ && go install github.com/air-verse/air@v1.61.6 \
+ && adduser -D -u 10001 app \
+ && mkdir -p /app/auths /app/data /tmp/air /tmp/gocache /go/pkg/mod \
+ && chown -R app:app /app /tmp/air /tmp/gocache /go/pkg/mod
+# app 用户可写的构建缓存（root 默认缓存在 /root/.cache，app 写不了）
+ENV GOCACHE=/tmp/gocache
+WORKDIR /app
+# 预下载依赖到 /go/pkg/mod（dev compose 用命名卷挂载，首次启动即命中，加速）
+COPY --chown=app:app go.mod go.sum ./
+RUN go mod download
+USER app
+EXPOSE 7863
+CMD ["air", "-c", ".air.toml"]

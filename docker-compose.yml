@@ -1,6 +1,14 @@
 services:
   wb2api:
-    build: .
+    build:
+      context: .
+      # 构建期走宿主机 relay（WSL 下 172.18.0.1:7891 -> Windows 代理 172.22.192.1:7890），
+      # 加速 go mod download / apk add。relay 启动方式见 README 或 ~/.proxy-relay/relay.py。
+      # 可在宿主机用 BUILD_HTTP_PROXY / BUILD_HTTPS_PROXY 覆盖；置空则不使用代理。
+      args:
+        HTTP_PROXY: ${BUILD_HTTP_PROXY-http://172.18.0.1:7891}
+        HTTPS_PROXY: ${BUILD_HTTPS_PROXY-http://172.18.0.1:7891}
+        NO_PROXY: ${BUILD_NO_PROXY-localhost,127.0.0.1}
     container_name: workbuddy2api
     restart: unless-stopped
     # 容器默认以 app 用户（uid 10001）运行。宿主机挂载目录属主不同会导致
