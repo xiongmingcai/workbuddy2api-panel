@@ -209,7 +209,9 @@ func (h *Handler) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Stream {
-			streamAnthropic(w, rc, chatModel)
+			// 上游只在流末帧回传真实 prompt_tokens；为让客户端（claude-hud 等）
+			// 从第一帧起就有可用的 input_tokens，先用请求内容估算，末帧再用上游值覆盖。
+			streamAnthropic(w, rc, chatModel, estimateInputTokens(&req))
 		} else {
 			resp, aerr := upstream.Aggregate(rc)
 			rc.Close()
@@ -275,6 +277,40 @@ func mapAnthropicModel(model string) string {
 		return def
 	}
 	return defaultAnthropicModel
+}
+
+// estimateInputTokens 粗略估算请求输入 token 数。
+//
+// 用途：流式首帧 message_start.usage.input_tokens。上游只在**流末帧**回传真实
+// prompt_tokens，而客户端状态栏（claude-hud 等）需要从第一帧起就有可用的
+// input_tokens 才能算出上下文占用；否则恒为 0，上下文条一直显示 0%。
+// 口径：CJK 约 0.75 token/字，其余约 4 字符/token；覆盖 system / tools / messages 原文。
+func estimateInputTokens(req *anthropicRequest) int {
+	var b strings.Builder
+	if len(req.System) > 0 {
+		b.Write(req.System)
+	}
+	if len(req.Tools) > 0 {
+		if raw, err := json.Marshal(req.Tools); err == nil {
+			b.Write(raw)
+		}
+	}
+	for _, m := range req.Messages {
+		b.Write(m.Content)
+	}
+	cjk, other := 0, 0
+	for _, r := range b.String() {
+		if (r >= 0x4E00 && r <= 0x9FFF) || (r >= 0x3000 && r <= 0x303F) || (r >= 0xFF00 && r <= 0xFFEF) {
+			cjk++
+		} else {
+			other++
+		}
+	}
+	est := int(float64(cjk)*0.75 + float64(other)/4.0)
+	if est < 1 {
+		est = 1
+	}
+	return est
 }
 
 // toChatBody 把 Anthropic Messages 请求转成内部 OpenAI Chat body（流式）。
@@ -478,7 +514,7 @@ func parseToolChoice(raw json.RawMessage) any {
 // content_block_stop)* → message_delta → message_stop。
 // 文本块 index 动态分配；每个工具调用一个 tool_use 块，arguments 以 input_json_delta
 // 分片（客户端拼接后为完整 JSON）。
-func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string) {
+func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string, estInput int) {
 	defer rc.Close()
 	fl, _ := w.(http.Flusher)
 	h := w.Header()
@@ -506,7 +542,7 @@ func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string) {
 		"message": map[string]any{
 			"id": msgID, "type": "message", "role": "assistant", "content": []any{},
 			"model": model, "stop_reason": nil, "stop_sequence": nil,
-			"usage": map[string]any{"input_tokens": 0, "output_tokens": 0},
+			"usage": map[string]any{"input_tokens": estInput, "output_tokens": 0},
 		},
 	})
 
@@ -516,6 +552,7 @@ func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string) {
 	nextIdx := 0
 	finishReason := ""
 	outTokens := 0
+	inTokens := estInput
 
 	for {
 		line, rerr := br.ReadString('\n')
@@ -576,6 +613,9 @@ func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string) {
 			finishReason = ch.FinishReason
 		}
 		if chunk.Usage != nil {
+			if v, ok := chunk.Usage["prompt_tokens"].(float64); ok && v > 0 {
+				inTokens = int(v)
+			}
 			if v, ok := chunk.Usage["completion_tokens"].(float64); ok {
 				outTokens = int(v)
 			}
@@ -594,7 +634,7 @@ func streamAnthropic(w http.ResponseWriter, rc io.ReadCloser, model string) {
 	send("message_delta", map[string]any{
 		"type": "message_delta",
 		"delta": map[string]any{"stop_reason": finishToStopReason(finishReason), "stop_sequence": nil},
-		"usage": map[string]any{"output_tokens": outTokens},
+		"usage": map[string]any{"input_tokens": inTokens, "output_tokens": outTokens},
 	})
 	send("message_stop", map[string]any{"type": "message_stop"})
 }
